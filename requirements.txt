@@ -1,0 +1,6 @@
+ollama
+streamlit
+psutil
+GPUtil
+Pillow
+pypdf

@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama-service
+    volumes:
+      - ollama_storage:/root/.ollama
+    # To expose Ollama to host (e.g. for CLI), uncomment ports.
+    # Avoid conflict with local Ollama running on port 11434.
+    # ports:
+    #   - "11435:11434"
+    restart: unless-stopped
+    # specific GPU support - uncomment if needed and using Nvidia Container Toolkit
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  agent-ui:
+    build: .
+    container_name: ollama-agent
+    ports:
+      - "8501:8501"
+    environment:
+      # Connect to the internal 'ollama' service
+      - OLLAMA_HOST=http://ollama:11434
+    volumes:
+      # Map source code for hot-reloading during development
+      - ./src:/app/src
+      - ./ui:/app/ui
+      - ./utils:/app/utils
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+volumes:
+  ollama_storage:
