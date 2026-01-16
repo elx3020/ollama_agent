@@ -1,6 +1,55 @@
 import psutil
 import shutil
 import platform
+import os
+import subprocess
+import urllib.request
+import json
+
+def _find_nvidia_smi():
+    """Find nvidia-smi executable, checking common Windows locations."""
+    # First try standard PATH lookup
+    nvidia_smi = shutil.which('nvidia-smi')
+    if nvidia_smi:
+        return nvidia_smi
+    
+    # On Windows, check common installation paths
+    if platform.system() == 'Windows':
+        common_paths = [
+            os.path.join(os.environ.get('SystemRoot', 'C:\\Windows'), 'System32', 'nvidia-smi.exe'),
+            os.path.join(os.environ.get('ProgramFiles', 'C:\\Program Files'), 'NVIDIA Corporation', 'NVSMI', 'nvidia-smi.exe'),
+        ]
+        for path in common_paths:
+            if os.path.isfile(path):
+                return path
+    
+    return None
+
+def _get_ollama_gpu_info():
+    """
+    Query Ollama API to check if GPU is available.
+    Works in Docker containers where nvidia-smi isn't accessible but Ollama has GPU access.
+    """
+    ollama_host = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+    try:
+        # Try to get running models or version info which may include GPU details
+        url = f"{ollama_host}/api/ps"
+        req = urllib.request.Request(url, method='GET')
+        with urllib.request.urlopen(req, timeout=5) as response:
+            data = json.loads(response.read().decode())
+            # Check if any model is using GPU
+            models = data.get('models', [])
+            for model in models:
+                details = model.get('details', {})
+                # If model is loaded, Ollama is likely using GPU if available
+                if model.get('size_vram', 0) > 0:
+                    return True, model.get('size_vram', 0) / (1024**3)  # Convert to GB
+        
+        # Alternative: try to infer from system by checking Ollama's /api/version or running a test
+        # For now, if Ollama is reachable, we assume it might have GPU
+        return None, 0  # Unknown
+    except Exception:
+        return None, 0
 
 def get_system_info():
     info = {}
@@ -15,7 +64,8 @@ def get_system_info():
     info['gpu_name'] = "None"
     info['vram_gb'] = 0
     
-    if shutil.which('nvidia-smi'):
+    nvidia_smi_path = _find_nvidia_smi()
+    if nvidia_smi_path:
         try:
             import GPUtil
             gpus = GPUtil.getGPUs()
@@ -24,9 +74,38 @@ def get_system_info():
                 info['gpu_name'] = gpus[0].name
                 info['vram_gb'] = round(gpus[0].memoryTotal / 1024, 2)
         except ImportError:
-            pass # GPUtil might not be installed or fail
+            # GPUtil not installed, fall back to nvidia-smi directly
+            try:
+                result = subprocess.run(
+                    [nvidia_smi_path, '--query-gpu=name,memory.total', '--format=csv,noheader,nounits'],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    lines = result.stdout.strip().split('\n')
+                    if lines:
+                        parts = lines[0].split(',')
+                        info['gpu_available'] = True
+                        info['gpu_name'] = parts[0].strip()
+                        if len(parts) > 1:
+                            info['vram_gb'] = round(float(parts[1].strip()) / 1024, 2)
+            except Exception:
+                pass
         except Exception:
             pass
+    
+    # If no GPU detected locally, check if running in Docker with Ollama having GPU access
+    if not info['gpu_available'] and os.environ.get('OLLAMA_HOST'):
+        ollama_gpu, vram = _get_ollama_gpu_info()
+        if ollama_gpu:
+            info['gpu_available'] = True
+            info['gpu_name'] = "GPU (via Ollama)"
+            info['vram_gb'] = round(vram, 2) if vram else 8  # Default estimate
+        elif ollama_gpu is None:
+            # Ollama is reachable but we couldn't determine GPU status
+            # Assume Ollama may have GPU access - user configured it
+            info['gpu_available'] = True
+            info['gpu_name'] = "GPU (assumed via Ollama)"
+            info['vram_gb'] = 8  # Conservative estimate for model recommendations
 
     return info
 

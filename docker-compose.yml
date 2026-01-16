@@ -11,14 +11,14 @@ services:
     # ports:
     #   - "11435:11434"
     restart: unless-stopped
-    # specific GPU support - uncomment if needed and using Nvidia Container Toolkit
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    # GPU support using Nvidia Container Toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   agent-ui:
     build: .
